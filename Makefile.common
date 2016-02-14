@@ -1,0 +1,41 @@
+# I personally don't care if you steal this makefile. --GM
+
+SRCDIR = src
+INCDIR = src
+INCLUDES = \
+	$(INCDIR)/common.h
+
+OBJS = \
+	$(OBJDIR)/compact.o \
+	$(OBJDIR)/gpu.o \
+	$(OBJDIR)/palcmp.o \
+	$(OBJDIR)/rect.o \
+	$(OBJDIR)/ycbcr.o \
+	\
+	$(OBJDIR)/main.o
+
+all: $(BINNAME) $(TOOLS)
+
+clean:
+	rm -f $(OBJS)
+
+$(OBJDIR):
+	mkdir -p $(OBJDIR)
+	touch $(OBJDIR)
+
+# for future reference
+#$(OBJDIR)/lua: $(OBJDIR)
+#	mkdir -p $(OBJDIR)/lua
+#	touch $(OBJDIR)/lua
+#
+
+#	touch $(OBJDIR)/lua
+$(BINNAME): $(OBJDIR) $(OBJS)
+	touch $(OBJDIR)
+	$(CC) -o $(BINNAME) $(LDFLAGS) $(OBJS) $(LIBS)
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.c $(INCLUDES)
+	$(CC) -c -o $@ $(CFLAGS) -I$(INCDIR) $<
+
+.PHONY: all clean
+
