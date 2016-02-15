@@ -1,6 +1,8 @@
 #define VIDSCALE 1
 #define VIDOUTSCALE 1
 
+#define AUDIO_RING_BUF (256*1024)
+
 #define SOFTWARE_BLIT_MODE
 
 #include <assert.h>
@@ -23,6 +25,11 @@ SDL_Texture *texlist[2] = {NULL, NULL};
 int curtex = 0;
 #endif
 
+uint8_t aring_data[AUDIO_RING_BUF];
+int aring_beg = 0; // Thread: audio
+int aring_end = 0; // Thread: main
+SDL_atomic_t aring_used;
+
 uint16_t ocpal[256];
 int vidw, vidh;
 uint16_t *scrbuf;
@@ -33,6 +40,62 @@ void abort_msg(const char *msg)
 	fprintf(stderr, "ERROR: %s\n", msg);
 	fflush(stderr);
 	abort();
+}
+
+int has_fired = 0;
+void authread(void *ud, Uint8 *stream, int len)
+{
+	// Clear buf
+	memset(stream, 0, len);
+
+	// Check how much of the buffer is available
+	int bufsz = SDL_AtomicGet(&aring_used);
+
+	// If we haven't fired, we need to wait for the buffer to fill)
+	if(!has_fired)
+	{
+		//if(bufsz <= 16384) return;
+
+		has_fired = 1;
+	}
+
+	// If there's nothing, copy nothing
+	if(bufsz <= 0)
+	{
+		has_fired = 0;
+		return;
+	}
+
+	// Clamp to output buffer size
+	if(bufsz > len)
+		bufsz = len;
+	int realbufsz = bufsz;
+
+	// Copy
+	Uint8 *sout = stream;
+	if(aring_beg + bufsz >= AUDIO_RING_BUF)
+	{
+		memcpy(sout, aring_data + aring_beg, (AUDIO_RING_BUF - aring_beg));
+		bufsz = AUDIO_RING_BUF - aring_beg;
+		sout += bufsz;
+		aring_beg = 0;
+	}
+
+	// Copy remainder
+	if(bufsz > 0)
+	{
+		memcpy(sout, aring_data + aring_beg, bufsz);
+		aring_beg += bufsz;
+	}
+
+	// advance + decrement used space
+	realbufsz = SDL_AtomicAdd(&aring_used, -realbufsz);
+
+	// ensure this is correct
+	assert(realbufsz >= 0);
+
+
+
 }
 
 void pal_to_rgb(int pal, int *restrict r, int *restrict g, int *restrict b)
@@ -163,13 +226,42 @@ int main(int argc, char *argv[])
 	fprintf(stderr, "framerate: %i FPS\n", fps);
 
 	// Read audio data
-	fgetc(fp); fgetc(fp); fgetc(fp); fgetc(fp);
-	fgetc(fp); fgetc(fp); fgetc(fp); fgetc(fp);
+	int aufmt = fgetc(fp);
+	int auchns = fgetc(fp);
+	if(auchns != (aufmt == 0 ? 0 : 1)) abort_msg("ERROR: only mono audio supported");
+	fgetc(fp); fgetc(fp);
+
+	int aufreq = fgetc(fp);
+	aufreq |= fgetc(fp)<<8;
+	aufreq |= fgetc(fp)<<16;
+	aufreq |= fgetc(fp)<<24;
+	assert(aufreq >= 0);
+
 	fgetc(fp); fgetc(fp); fgetc(fp); fgetc(fp);
 	fgetc(fp); fgetc(fp); fgetc(fp); fgetc(fp);
 
-	// TODO: audio
-	SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO);
+	// Init SDL
+	if(aufmt != 0)
+	{
+		SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+
+		SDL_AtomicSet(&aring_used, 0);
+		SDL_AudioSpec auspec;
+		memset(&auspec, 0, sizeof(SDL_AudioSpec));
+		fprintf(stderr, "output freq = %i\n", aufreq);
+		fprintf(stderr, "channels = %i\n", auchns);
+		auspec.freq = aufreq;
+		auspec.format = AUDIO_U8;
+		auspec.channels = auchns;
+		auspec.samples = 2048;
+		auspec.callback = authread;
+		int err = SDL_OpenAudio(&auspec, NULL);
+		assert(err >= 0);
+		SDL_PauseAudio(0);
+
+	} else {
+		SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO);
+	}
 
 	// Set up OC palette if fmt subclass is 0x01
 	if(fscls == 0x01)
@@ -222,10 +314,10 @@ int main(int argc, char *argv[])
 	scrbuf = malloc(vidw*vidh*2);
 	memset(scrbuf, 0, vidw*vidh*2);
 #endif
-	int fgcol = 0;
-	int bgcol = 0;
 
 	// Now draw things!
+	int fgcol = 0;
+	int bgcol = 0;
 	for(;;)
 	{
 #ifndef SOFTWARE_BLIT_MODE
@@ -408,6 +500,44 @@ int main(int argc, char *argv[])
 			SDL_SetRenderDrawColor(renderer, cr, cg, cb, SDL_ALPHA_OPAQUE);
 			SDL_RenderFillRect(renderer, &r);
 #endif
+		}
+
+		// Parse audio
+		if(aufmt != 0)
+		{
+			int ablen = fgetc(fp);
+			ablen |= fgetc(fp)<<8;
+			assert(ablen >= 0);
+
+			if(ablen != 0)
+			{
+				int realablen = ablen;
+
+				if(aring_end + ablen >= AUDIO_RING_BUF)
+				{
+					// Read until buffer end
+					fread(aring_data + aring_end, AUDIO_RING_BUF - aring_end, 1, fp);
+
+					// Wrap values
+					ablen -= (AUDIO_RING_BUF - aring_end);
+					aring_end = 0;
+				}
+
+				// Read remaining data
+				if(ablen > 0)
+				{
+					fread(aring_data + aring_end, ablen, 1, fp);
+					aring_end += ablen;
+				}
+
+				// Add to audio ring buffer
+				int incr = SDL_AtomicAdd(&aring_used, realablen);
+				assert(incr < AUDIO_RING_BUF);
+
+				// Align
+				if((ablen & 1) != 0)
+					fgetc(fp);
+			}
 		}
 
 		// Blit

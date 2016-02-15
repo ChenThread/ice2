@@ -101,7 +101,7 @@ int main(int argc, char *argv[])
 	int vstream_idx = -1;
 	int astream_idx = -1;
 	fprintf(stderr, "streams: %i\n", format_ctx->nb_streams);
-	for(i = 0; i < format_ctx->nb_streams; i++)
+	for(i = 0; i < (int)(format_ctx->nb_streams); i++)
 	{
 		fprintf(stderr, "mtyp: %i = %i\n", i, format_ctx->streams[i]->codec->codec_type);
 
@@ -122,7 +122,7 @@ int main(int argc, char *argv[])
 		{
 			astream = format_ctx->streams[i];
 
-			if(astream->codec->codec_type != AVMEDIA_TYPE_VIDEO)
+			if(astream->codec->codec_type != AVMEDIA_TYPE_AUDIO)
 			{
 				astream = NULL;
 			} else {
@@ -132,21 +132,39 @@ int main(int argc, char *argv[])
 		}
 	}
 	assert(vstream_idx >= 0);
-	assert(vstream_idx < format_ctx->nb_streams);
+	assert(vstream_idx < (int)(format_ctx->nb_streams));
+	assert(astream_idx >= -1);
+	assert(astream_idx < (int)(format_ctx->nb_streams));
 
 	vcodec = avcodec_find_decoder(vstream->codec->codec_id);
 	assert(vcodec != NULL);
 	fprintf(stderr, "video codec: %s\n", vcodec->name);
 
+	if(astream != NULL)
+	{
+		acodec = avcodec_find_decoder(astream->codec->codec_id);
+		if(acodec != NULL)
+		{
+			fprintf(stderr, "audio codec: %s\n", acodec->name);
+		}
+	}
+
 	// set some options
 	AVDictionary *vopts = NULL;
 	av_dict_set(&vopts, "refcounted_frames", "1", 0);
+	AVDictionary *aopts = NULL;
+	av_dict_set(&aopts, "refcounted_frames", "1", 0);
 
 	// open codec context
 	//AVCodecContext *vcodec_ctx = avcodec_alloc_context3(vcodec);
 	AVCodecContext *vcodec_ctx = vstream->codec;
 	assert(vcodec_ctx != NULL);
 	err = avcodec_open2(vcodec_ctx, vcodec, &vopts);
+	assert(err == 0);
+
+	AVCodecContext *acodec_ctx = astream->codec;
+	assert(acodec_ctx != NULL);
+	err = avcodec_open2(acodec_ctx, acodec, &aopts);
 	assert(err == 0);
 
 	// allocate frame
@@ -195,26 +213,38 @@ int main(int argc, char *argv[])
 		// reserved
 		fputc(0, fp); fputc(0, fp); fputc(0, fp);
 
-		// audio codec (0x00 = no audio, 0x01 = PCM, 0x02 = IMA ADPCM, 0x03 = DFPWM?)
-		fputc(0, fp);
-		
-		// channels
-		fputc(0, fp);
+		if(acodec_ctx != NULL)
+		{
+			// audio codec
+			// 0x00 = no audio (thus no audio packets)
+			// 0x01 = 8-bit unsigned PCM
+			// 0x02 = 16-bit signed PCM
+			// 0x03 = XA-ADPCM knockoff (TODO)
+			fputc(0x01, fp);
 
-		// bytes per block (0 if irrelevant)
-		fputc(0, fp);
-		fputc(0, fp);
+			// channels
+			// TODO: handle more than one channel
+			fputc(0x01, fp);
 
-		// audio frequency
-		fputc(0, fp);
-		fputc(0, fp);
-		fputc(0, fp);
-		fputc(0, fp);
+			// reserved
+			fputc(0, fp); fputc(0, fp);
 
-		// reserved
-		fputc(0, fp); fputc(0, fp); fputc(0, fp); fputc(0, fp);
-		fputc(0, fp); fputc(0, fp); fputc(0, fp); fputc(0, fp);
+			// audio frequency
+			fprintf(stderr, "audio: %i, %i Hz\n", acodec_ctx->sample_fmt, acodec_ctx->sample_rate);
+			fputc((acodec_ctx->sample_rate>>0) & 0xFF, fp);
+			fputc((acodec_ctx->sample_rate>>8) & 0xFF, fp);
+			fputc((acodec_ctx->sample_rate>>16) & 0xFF, fp);
+			fputc((acodec_ctx->sample_rate>>24) & 0xFF, fp);
 
+			// reserved
+			fputc(0, fp); fputc(0, fp); fputc(0, fp); fputc(0, fp);
+			fputc(0, fp); fputc(0, fp); fputc(0, fp); fputc(0, fp);
+
+		} else {
+			for(i = 0; i < 16; i++)
+				fputc(0, fp);
+
+		}
 	}
 
 #ifndef PIXEL15
@@ -271,6 +301,20 @@ int main(int argc, char *argv[])
 	assert(sws_isSupportedOutput(AV_PIX_FMT_RGB24));
 	struct SwsContext *scaler_ctx = NULL;
 
+	// set up resampler
+	struct SwrContext *resamp_ctx = swr_alloc_set_opts(NULL,
+		AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_U8, acodec_ctx->sample_rate,
+		acodec_ctx->channel_layout, acodec_ctx->sample_fmt, acodec_ctx->sample_rate,
+		0, NULL);
+	assert(resamp_ctx != NULL);
+	err = swr_init(resamp_ctx);
+	assert(err == 0);
+
+	// set up audio buffers
+	uint8_t *aubuf = NULL;
+	size_t aubuf_len = 0;
+	size_t aubuf_max = 0;
+
 	for(;;)
 	{
 		// read frame
@@ -285,8 +329,69 @@ int main(int argc, char *argv[])
 		}
 
 		assert(err == 0);
-		AVStream *tmp_vstream = format_ctx->streams[pkt.stream_index];
-		if(tmp_vstream != vstream) continue;
+		AVStream *tmp_stream = format_ctx->streams[pkt.stream_index];
+		if(tmp_stream != vstream)
+		{
+			if(tmp_stream != astream)
+			{
+				av_packet_unref(&pkt);
+				continue;
+			}
+
+			// decode audio
+			void *bdata = pkt.data;
+			size_t bsize = pkt.size;
+			int brem = pkt.size;
+
+			// *really* decode audio
+			// (yes, you have to call this several times with some codecs)
+			while(brem > 0)
+			{
+				// decode
+				err = avcodec_decode_audio4(acodec_ctx, frame, &got_pic, &pkt);
+				assert(err >= 0);
+				int xsize = err;
+
+				if(got_pic)
+				{
+					// add to buffer
+					int outsmps = swr_get_out_samples(resamp_ctx, frame->nb_samples);
+					aubuf_len += outsmps;
+					if(aubuf_len+128 > aubuf_max)
+					{
+						aubuf_max = aubuf_len + 256;
+						aubuf = realloc(aubuf, aubuf_max*1*1);
+						//fprintf(stderr, "out %i\n", (int)aubuf_max);
+					}
+
+					// resample + copy
+					uint8_t *bmesh[4] = {(uint8_t *)(aubuf + aubuf_len - outsmps)};
+					int rserr = swr_convert(resamp_ctx
+						, bmesh, outsmps/(1*1)
+						, frame->data, frame->nb_samples
+						);
+					assert(rserr >= 0);
+					assert(rserr == outsmps);
+
+					// advance
+					brem -= xsize;
+					pkt.data += xsize;
+					pkt.size += xsize;
+					//fprintf(stderr, "B%i R%i L%i\n",(int)aubuf_len,brem,err);
+
+					// clean up
+					av_frame_unref(frame);
+				}
+			}
+
+			// reset packet
+			pkt.data = bdata;
+			pkt.size = bsize;
+
+			// carry on
+			av_packet_unref(&pkt);
+			continue;
+		}
 
 		err = avcodec_decode_video2(vcodec_ctx, frame, &got_pic, &pkt);
 		if(err < 0)
@@ -395,6 +500,33 @@ int main(int argc, char *argv[])
 			int e = pthread_join(algo_thread, (void *)&Ta);
 			assert(e == 0);
 #endif
+
+			// add sound packet
+			if(acodec_ctx != NULL)
+			{
+				if(aubuf_len == 0)
+				{
+					// no sound in this packet
+					fputc(0, fp);
+					fputc(0, fp);
+				} else {
+
+					// pull packet
+					assert(aubuf_len >= 0 && aubuf_len < 65536);
+					fputc((int)(aubuf_len&0xFF), fp);
+					fputc((int)(aubuf_len>>8), fp);
+
+					// write
+					fwrite(aubuf, aubuf_len, 1, fp);
+
+					// pad to 16-bit
+					if((aubuf_len & 1) != 0)
+						fputc(0, fp);
+
+					// clear buffer
+					aubuf_len = 0;
+				}
+			}
 		}
 
 		// back up intended buffer for frame compare
