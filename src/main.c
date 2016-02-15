@@ -100,14 +100,20 @@ int main(int argc, char *argv[])
 	AVStream *astream = NULL;
 	int vstream_idx = -1;
 	int astream_idx = -1;
+	fprintf(stderr, "streams: %i\n", format_ctx->nb_streams);
 	for(i = 0; i < format_ctx->nb_streams; i++)
 	{
+		fprintf(stderr, "mtyp: %i = %i\n", i, format_ctx->streams[i]->codec->codec_type);
+
 		if(vstream == NULL)
 		{
 			vstream = format_ctx->streams[i];
 
 			if(vstream->codec->codec_type != AVMEDIA_TYPE_VIDEO)
+			{
+				vstream = NULL;
 				continue;
+			}
 
 			vstream_idx = i;
 		}
@@ -117,7 +123,10 @@ int main(int argc, char *argv[])
 			astream = format_ctx->streams[i];
 
 			if(astream->codec->codec_type != AVMEDIA_TYPE_VIDEO)
+			{
+				astream = NULL;
 				continue;
+			}
 
 			astream_idx = i;
 		}
