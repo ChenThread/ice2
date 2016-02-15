@@ -6,8 +6,10 @@ INCLUDES = \
 	$(INCDIR)/common.h
 
 OBJS = \
+	$(OBJDIR)/algo.o \
 	$(OBJDIR)/compact.o \
 	$(OBJDIR)/gpu.o \
+	$(OBJDIR)/mvec.o \
 	$(OBJDIR)/palcmp.o \
 	$(OBJDIR)/rect.o \
 	$(OBJDIR)/ycbcr.o \

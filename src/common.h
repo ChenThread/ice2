@@ -10,6 +10,10 @@
 
 #include <pthread.h>
 
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+
 // SSSE3 intrinsics
 #include <tmmintrin.h>
 
@@ -121,6 +125,9 @@ extern pixeltyp rawinbuf_pal[VH][VW];
 extern pixeltyp precurbuf_pal[VH][VW];
 extern pixeltyp rawcurbuf_pal[VH][VW];
 
+// algo.c
+void *algo_1(void *tdat);
+
 // compact.c
 void gpu_compact(void);
 
@@ -130,6 +137,9 @@ void gpu_emit(void);
 int gpu_compar_palidx(const void *av, const void *bv);
 void gpu_fill(int bx, int by, int bw, int bh, int l, int cb, int cr, int pal, int add_op);
 void gpu_copy(int bx, int by, int bw, int bh, int dx, int dy, int add_op);
+
+// mvec.c
+void *calc_motion_comp(void *tdat);
 
 // palcmp.c
 void pal_to_rgb(int pal, int *restrict r, int *restrict g, int *restrict b);
