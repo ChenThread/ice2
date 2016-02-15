@@ -3,7 +3,6 @@
 
 #include "common.h"
 
-//define GPU_BUDGET_MAX 2000
 FILE *fp;
 
 int gpu_usage_saving2 = 0;
@@ -648,7 +647,7 @@ static void *algo_1(void *tdat)
 #endif
 						assert(g->bh >= 1 && g->bh <= VH);
 						assert(g->bw >= 1 && g->bw <= VW);
-#if VW*VH > 65536
+#if VW*VH >= 65536
 						fputc((g->bx+g->by*VW)&0xFF, fp);
 						fputc(((g->bx+g->by*VW)>>8)&0xFF, fp);
 						fputc(((g->bx+g->by*VW)>>16)&0xFF, fp);
@@ -802,10 +801,10 @@ int main(int argc, char *argv[])
 	//fp = (VH <= 160 && argc > 1 ? fopen(argv[1], "wb") : NULL);
 	fp = (argc > 1 ? fopen(argv[1], "wb") : NULL);
 #else
-	fp = (VH <= 63 && argc > 1 ? fopen(argv[1], "wb") : NULL);
+	fp = (VH <= 60 && argc > 1 ? fopen(argv[1], "wb") : NULL);
 #endif
 
-	if(VH <= 63 && argc > 1)
+	if(VH <= 60 && argc > 1)
 	{
 		if(fp == NULL)
 		{
@@ -853,6 +852,56 @@ int main(int argc, char *argv[])
 		}
 	}
 #endif
+
+	// write header
+	if(fp != NULL)
+	{
+		fprintf(fp, "ICE2");
+
+		// format class (0x01 == uncompressed)
+		fputc(0x01, fp);
+
+		// format subclass (0x01 == OC, 0x02 == PIXEL15, 0x03 == PIXEL16(TODO?))
+#ifdef PIXEL15
+		fputc(0x02, fp);
+#else
+		fputc(0x01, fp);
+#endif
+
+		// version for given format class
+		fputc(0x01, fp); fputc(0x00, fp);
+
+		// dimensions
+		fputc(VW&0xFF, fp); fputc(VW>>8, fp);
+		fputc(VH&0xFF, fp); fputc(VH>>8, fp);
+
+		// framerate (TODO: not hardcode this)
+		fputc(60, fp);
+
+		// reserved
+		fputc(0, fp); fputc(0, fp); fputc(0, fp);
+
+		// audio codec (0x00 = no audio, 0x01 = PCM, 0x02 = IMA ADPCM, 0x03 = DFPWM?)
+		fputc(0, fp);
+		
+		// channels
+		fputc(0, fp);
+
+		// bytes per block (0 if irrelevant)
+		fputc(0, fp);
+		fputc(0, fp);
+
+		// audio frequency
+		fputc(0, fp);
+		fputc(0, fp);
+		fputc(0, fp);
+		fputc(0, fp);
+
+		// reserved
+		fputc(0, fp); fputc(0, fp); fputc(0, fp); fputc(0, fp);
+		fputc(0, fp); fputc(0, fp); fputc(0, fp); fputc(0, fp);
+
+	}
 
 	pthread_t algo_thread;
 	int fired_algo_thread = 0;
@@ -925,7 +974,23 @@ int main(int argc, char *argv[])
 	fprintf(stderr, "***** DONE *****\n");
 
 	if(fp != NULL)
+	{
+		fputc(0x00, fp);
+		fputc(0x00, fp);
+#ifdef PIXEL15
+#if VW >= 256 || VH >= 248
+		fputc(0xFF, fp);
+		fputc(0xFD, fp);
+#else
+		fputc(0xFD, fp);
+		fputc(0xFF, fp);
+#endif
+#else
+		fputc(0xFD, fp);
+#endif
 		fclose(fp);
+	}
+
 
 	return 0;
 }

@@ -17,8 +17,8 @@
 //define NO_THREADS
 
 #if 1
-#define VW 688
-#define VH 384
+#define VW 640
+#define VH 480
 #define GPU_BUDGET_HARD_MAX (2000)
 #define GPU_BUDGET_MAX (2000-6)
 #define COST_COPY 0
@@ -29,8 +29,8 @@
 typedef uint16_t pixeltyp;
 #define PIXEL15
 #define NOYUV
-//define NOCOMPACT
-//define NOMOCOMP
+#define NOCOMPACT
+#define NOMOCOMP
 #define LAZY_MOCOMP
 #define FAST_LARGE_BOXES
 
