@@ -76,10 +76,13 @@ void authread(void *ud, Uint8 *stream, int len)
 	if(aring_beg + bufsz >= AUDIO_RING_BUF)
 	{
 		memcpy(sout, aring_data + aring_beg, (AUDIO_RING_BUF - aring_beg));
-		bufsz = AUDIO_RING_BUF - aring_beg;
-		sout += bufsz;
+		int bufdec = AUDIO_RING_BUF - aring_beg;
+		bufsz -= bufdec;
+		sout += bufdec;
 		aring_beg = 0;
 	}
+
+	assert(bufsz >= 0);
 
 	// Copy remainder
 	if(bufsz > 0)
