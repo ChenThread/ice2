@@ -112,10 +112,10 @@ int main(int argc, char *argv[])
 			if(vstream->codec->codec_type != AVMEDIA_TYPE_VIDEO)
 			{
 				vstream = NULL;
-				continue;
+			} else {
+				vstream_idx = i;
 			}
 
-			vstream_idx = i;
 		}
 
 		if(astream == NULL)
@@ -125,10 +125,10 @@ int main(int argc, char *argv[])
 			if(astream->codec->codec_type != AVMEDIA_TYPE_VIDEO)
 			{
 				astream = NULL;
-				continue;
+			} else {
+				astream_idx = i;
 			}
 
-			astream_idx = i;
 		}
 	}
 	assert(vstream_idx >= 0);
@@ -190,6 +190,7 @@ int main(int argc, char *argv[])
 		if(fps >= 255) fps = tfps;
 		assert(fps >= 1 && fps <= 255);
 		fputc(fps, fp);
+		// TODO: enforce 20fps for OC mode
 
 		// reserved
 		fputc(0, fp); fputc(0, fp); fputc(0, fp);
@@ -290,7 +291,7 @@ int main(int argc, char *argv[])
 		err = avcodec_decode_video2(vcodec_ctx, frame, &got_pic, &pkt);
 		if(err < 0)
 		{
-			fprintf(stderr, "%i %i\n", pkt.dts, pkt.pts);
+			//fprintf(stderr, "%i %i\n", pkt.dts, pkt.pts);
 			fprintf(stderr, "decode error (%i): %s\n", pkt.size, av_err2str(err));
 			av_packet_unref(&pkt);
 			continue;

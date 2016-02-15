@@ -23,6 +23,9 @@ SDL_Texture *texlist[2] = {NULL, NULL};
 int curtex = 0;
 #endif
 
+uint16_t ocpal[256];
+int vidw, vidh;
+uint16_t *scrbuf;
 
 __attribute__((noreturn))
 void abort_msg(const char *msg)
@@ -32,9 +35,88 @@ void abort_msg(const char *msg)
 	abort();
 }
 
+void pal_to_rgb(int pal, int *restrict r, int *restrict g, int *restrict b)
+{
+	assert(pal >= 0 && pal <= 255);
+
+	if(pal < 16)
+	{
+#define GREY_RAMP 64
+		*r = *g = *b = ((pal+1)*255)/(GREY_RAMP-1);
+		//fprintf(stderr, "%i %02X\n", pal, *r);
+
+	} else {
+		pal -= 16;
+		*g = ((pal%8)*255)/7;
+		*r = (((pal/8)%6)*255)/5;
+		*b = (((pal/8)/6)*255)/4;
+
+	}
+
+	assert(*r >= 0 && *r <= 255);
+	assert(*g >= 0 && *g <= 255);
+	assert(*b >= 0 && *b <= 255);
+}
+
+void do_mocomp(int mocx, int mocy)
+{
+	int y;
+
+	// Do mocomp copy
+	if(mocx != 0 || mocy != 0)
+	{
+		int mocw = vidw-(mocx<0?-mocx:mocx);
+		int moch = vidh-(mocy<0?-mocy:mocy);
+
+#ifdef SOFTWARE_BLIT_MODE
+		int srcx=(mocx<0?-mocx:0);
+		int srcy=(mocy<0?-mocy:0);
+		int dstx=(mocx>0? mocx:0);
+		int dsty=(mocy>0? mocy:0);
+
+		if(mocy < 0)
+		{
+			for(y = 0; y < moch; y++)
+			{
+				memcpy(
+					scrbuf + dstx + (y+dsty)*vidw,
+					scrbuf + srcx + (y+srcy)*vidw,
+					mocw*2);
+			}
+
+		} else if(mocy > 0) {
+			for(y = moch-1; y >= 0; y--)
+			{
+				memcpy(
+					scrbuf + dstx + (y+dsty)*vidw,
+					scrbuf + srcx + (y+srcy)*vidw,
+					mocw*2);
+			}
+		} else {
+			for(y = 0; y < moch; y++)
+			{
+				memmove(
+					scrbuf + dstx + (y+dsty)*vidw,
+					scrbuf + srcx + (y+srcy)*vidw,
+					mocw*2);
+			}
+
+		}
+
+#else
+		SDL_Rect srcrect = {.x=(mocx<0?-mocx:0), .y=(mocy<0?-mocy:0),
+			.w=mocw*VIDSCALE, .h=moch*VIDSCALE};
+		SDL_Rect dstrect = {.x=(mocx>0? mocx:0)*VIDSCALE, .y=(mocy>0? mocy:0)*VIDSCALE,
+			.w=mocw*VIDSCALE, .h=moch*VIDSCALE};
+
+		SDL_RenderCopy(renderer, texlist[curtex], &srcrect, &dstrect);
+#endif
+	}
+}
+
 int main(int argc, char *argv[])
 {
-	int x, y;
+	int x, y, i;
 
 	// Open file
 	FILE *fp = fopen(argv[1], "rb");
@@ -48,20 +130,29 @@ int main(int argc, char *argv[])
 	int fcls = fgetc(fp);
 	if(fcls != 0x01) abort_msg("format class not supported");
 
-	// TODO: OC format
 	int fscls = fgetc(fp);
-	if(fscls != 0x02) abort_msg("format subclass not supported");
+	if(fscls != 0x01 && fscls != 0x02) abort_msg("format subclass not supported");
 
 	int fver = fgetc(fp);
 	fver |= fgetc(fp)<<8;
 	if(fver != 0x01) abort_msg("format version not supported");
 
-	int vidw = fgetc(fp);
+	vidw = fgetc(fp);
 	vidw |= fgetc(fp)<<8;
-	int vidh = fgetc(fp);
+	vidh = fgetc(fp);
 	vidh |= fgetc(fp)<<8;
 	if(vidw < 1) abort_msg("invalid width");
 	if(vidh < 1) abort_msg("invalid height");
+
+	// For OC mode, use double-height to get proper aspect ratio
+	if(fscls == 0x01)
+	{
+		vidh *= 2;
+
+		// Upscale further anyway
+		vidw *= 4;
+		vidh *= 4;
+	}
 
 	int fps = fgetc(fp);
 	if(fps < 1) abort_msg("invalid framerate");
@@ -79,6 +170,22 @@ int main(int argc, char *argv[])
 
 	// TODO: audio
 	SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO);
+
+	// Set up OC palette if fmt subclass is 0x01
+	if(fscls == 0x01)
+	{
+		for(i = 0; i < 256; i++)
+		{
+			int r, g, b;
+			pal_to_rgb(i, &r, &g, &b);
+
+			r >>= 3;
+			g >>= 2;
+			b >>= 3;
+
+			ocpal[i] = (r<<11)|(g<<5)|b;
+		}
+	}
 
 	// Set up window + renderer
 	window = SDL_CreateWindow("- intelligent cirno experience - player -"
@@ -112,16 +219,15 @@ int main(int argc, char *argv[])
 	int ticks_resid = 0;
 	int ticks_resid_inc = 1000000/fps;
 #ifdef SOFTWARE_BLIT_MODE
-	uint16_t *scrbuf = malloc(vidw*vidh*2);
+	scrbuf = malloc(vidw*vidh*2);
 	memset(scrbuf, 0, vidw*vidh*2);
 #endif
+	int fgcol = 0;
+	int bgcol = 0;
+
 	// Now draw things!
 	for(;;)
 	{
-		// Get mocomp info
-		int mocx = (int)(int8_t)fgetc(fp);
-		int mocy = (int)(int8_t)fgetc(fp);
-
 #ifndef SOFTWARE_BLIT_MODE
 		// Set render target
 		curtex ^= 1;
@@ -132,57 +238,14 @@ int main(int argc, char *argv[])
 		SDL_RenderCopy(renderer, texlist[curtex], NULL, NULL);
 #endif
 
-		// Do mocomp copy
-		if(mocx != 0 || mocy != 0)
+		if(fscls != 0x01)
 		{
-			int mocw = vidw-(mocx<0?-mocx:mocx);
-			int moch = vidh-(mocy<0?-mocy:mocy);
-
-#ifdef SOFTWARE_BLIT_MODE
-			int srcx=(mocx<0?-mocx:0);
-			int srcy=(mocy<0?-mocy:0);
-			int dstx=(mocx>0? mocx:0);
-			int dsty=(mocy>0? mocy:0);
-
-			if(mocy < 0)
-			{
-				for(y = 0; y < moch; y++)
-				{
-					memcpy(
-						scrbuf + dstx + (y+dsty)*vidw,
-						scrbuf + srcx + (y+srcy)*vidw,
-						mocw*2);
-				}
-
-			} else if(mocy > 0) {
-				for(y = moch-1; y >= 0; y--)
-				{
-					memcpy(
-						scrbuf + dstx + (y+dsty)*vidw,
-						scrbuf + srcx + (y+srcy)*vidw,
-						mocw*2);
-				}
-			} else {
-				for(y = 0; y < moch; y++)
-				{
-					memmove(
-						scrbuf + dstx + (y+dsty)*vidw,
-						scrbuf + srcx + (y+srcy)*vidw,
-						mocw*2);
-				}
-
-			}
-
-			// TODO: copy
-#else
-			SDL_Rect srcrect = {.x=(mocx<0?-mocx:0), .y=(mocy<0?-mocy:0),
-				.w=mocw*VIDSCALE, .h=moch*VIDSCALE};
-			SDL_Rect dstrect = {.x=(mocx>0? mocx:0)*VIDSCALE, .y=(mocy>0? mocy:0)*VIDSCALE,
-				.w=mocw*VIDSCALE, .h=moch*VIDSCALE};
-
-			SDL_RenderCopy(renderer, texlist[curtex], &srcrect, &dstrect);
-#endif
+			// Get mocomp info
+			int mocx = (int)(int8_t)fgetc(fp);
+			int mocy = (int)(int8_t)fgetc(fp);
+			do_mocomp(mocx, mocy);
 		}
+
 
 #ifndef SOFTWARE_BLIT_MODE
 		curtex ^= 1;
@@ -191,57 +254,120 @@ int main(int argc, char *argv[])
 		// Draw rectangles
 		for(;;)
 		{
-			int rw, rh;
+			int offs, rw, rh, rx, ry;
+			uint16_t col;
 
-			// Get dims
-			if(vidh >= 248 || vidw >= 256)
+			if(fscls == 0x01)
 			{
-				// 16-bit size mode
+				// OC mode
 				rh = fgetc(fp);
-				rh |= fgetc(fp)<<8;
 				assert(rh > 0);
-				if((rh>>8) == 0xFF) break;
+				if(rh == 0xFF) break;
+
+				if((rh & 0x80) != 0)
+				{
+					// Get mocomp info
+					// XXX: this doesn't use the full featureset of a copy!
+					// (it assumes largest possible rect for a given mocomp)
+					fgetc(fp);
+					fgetc(fp);
+					fgetc(fp);
+					int mocx = (int)(int8_t)fgetc(fp);
+					int mocy = (int)(int8_t)fgetc(fp);
+					do_mocomp(mocx*4, mocy*2*4);
+					continue;
+				}
+
+				// Get remainder of rect
+				ry = fgetc(fp);
 				rw = fgetc(fp);
-				rw |= fgetc(fp)<<8;
-				assert(rw > 0);
+				rx = fgetc(fp);
+
+				// Get colour
+				if((rh & 0x40) != 0)
+				{
+					if((ry & 0x40) != 0) bgcol = fgetc(fp);
+					col = ocpal[bgcol];
+				} else {
+					if((ry & 0x40) != 0) fgcol = fgetc(fp);
+					col = ocpal[fgcol];
+				}
+
+				// Clear flag bits
+				ry &= ~0x40;
+				rh &= ~0x40;
+
+				// Double-height
+				rh *= 2;
+				ry *= 2;
+
+				// Further upscaling
+				rx *= 4;
+				ry *= 4;
+				rw *= 4;
+				rh *= 4;
+
+				// Get offset
+				offs = rx + ry*vidw;
+
+				assert(offs >= 0);
+				assert(offs < vidw*vidh);
+				assert(rx >= 0);
+				assert(ry >= 0);
+				assert(rx+rw <= vidw);
+				assert(ry+rh <= vidh);
 
 			} else {
-				// 8-bit size mode
-				rh = fgetc(fp);
-				rw = fgetc(fp);
-				assert(rh > 0);
-				assert(rw > 0);
-				if(rh == 0xFF) break;
+				// GBA+RPi mode
+
+				// Get dims
+				if(vidh >= 248 || vidw >= 256) {
+					// 16-bit size mode
+					rh = fgetc(fp);
+					rh |= fgetc(fp)<<8;
+					assert(rh > 0);
+					if((rh>>8) == 0xFF) break;
+					rw = fgetc(fp);
+					rw |= fgetc(fp)<<8;
+					assert(rw > 0);
+
+				} else {
+					// 8-bit size mode
+					rh = fgetc(fp);
+					assert(rh > 0);
+					if(rh == 0xFF) break;
+					rw = fgetc(fp);
+					assert(rw > 0);
+				}
+
+				// Get offs
+				offs = fgetc(fp);
+				offs |= fgetc(fp)<<8;
+				if(vidw*vidh >= 0x10000)
+				{
+					// 32-bit offset mode
+					offs |= fgetc(fp)<<16;
+					offs |= fgetc(fp)<<24;
+				}
+				assert(offs >= 0);
+				assert(offs < vidw*vidh);
+
+				// Turn offs into coords
+				rx = offs%vidw;
+				ry = offs/vidw;
+				assert(rx+rw <= vidw);
+				assert(ry+rh <= vidh);
+
+				// Get colour
+				col = fgetc(fp);
+				col |= fgetc(fp)<<8;
+
+				// Convert to 16bpp + R/B swap
+				col = (col & 0x001F)|((col & ~0x001F)<<1);
+				col = (col & 0x07E0)|(col>>11)|(col<<11);
 			}
-
-			// Get offs
-			int offs;
-			offs = fgetc(fp);
-			offs |= fgetc(fp)<<8;
-			if(vidw*vidh >= 0x10000)
-			{
-				// 32-bit offset mode
-				offs |= fgetc(fp)<<16;
-				offs |= fgetc(fp)<<24;
-			}
-			assert(offs >= 0);
-			assert(offs < vidw*vidh);
-
-			// Turn offs into coords
-			int rx = offs%vidw;
-			int ry = offs/vidw;
-			assert(rx+rw <= vidw);
-			assert(ry+rh <= vidh);
-
-			// Get colour
-			uint16_t col = fgetc(fp);
-			col |= fgetc(fp)<<8;
 
 #ifdef SOFTWARE_BLIT_MODE
-			// Convert to 16bpp + R/B swap
-			col = (col & 0x001F)|((col & ~0x001F)<<1);
-			col = (col & 0x07E0)|(col>>11)|(col<<11);
-
 			// Expand to 32 bits
 			uint32_t col32 = col;
 			col32 |= col32<<16;
@@ -273,9 +399,9 @@ int main(int argc, char *argv[])
 
 #else
 			// Split into RGB
-			int cb = ((col>>10)&31)<<3;
-			int cg = ((col>>5)&31)<<3;
-			int cr = ((col>>0)&31)<<3;
+			int cr = ((col>>11)&31)<<3;
+			int cg = ((col>>5)&63)<<2;
+			int cb = ((col>>0)&31)<<3;
 
 			// Draw rect
 			SDL_Rect r = {.x=rx*VIDSCALE, .y=ry*VIDSCALE, .w=rw*VIDSCALE, .h=rh*VIDSCALE};

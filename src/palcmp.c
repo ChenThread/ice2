@@ -26,9 +26,9 @@ void pal_to_rgb(int pal, int *restrict r, int *restrict g, int *restrict b)
 
 	} else {
 		pal -= 16;
-		*g = ((pal%8)*255)/8;
-		*r = (((pal/8)%6)*255)/6;
-		*b = (((pal/8)/6)*255)/5;
+		*g = ((pal%8)*255)/7;
+		*r = (((pal/8)%6)*255)/5;
+		*b = (((pal/8)/6)*255)/4;
 
 	}
 #endif
