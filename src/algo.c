@@ -482,14 +482,17 @@ void *algo_1(void *tdat)
 #endif
 						assert(g->bh >= 1 && g->bh <= VH);
 						assert(g->bw >= 1 && g->bw <= VW);
+						int offs = g->bx+g->by*VW;
+						assert(offs >= 0);
+						assert(offs < VW*VH);
 #if VW*VH >= 65536
-						fputc((g->bx+g->by*VW)&0xFF, fp);
-						fputc(((g->bx+g->by*VW)>>8)&0xFF, fp);
-						fputc(((g->bx+g->by*VW)>>16)&0xFF, fp);
-						fputc(((g->bx+g->by*VW)>>24)&0xFF, fp);
+						fputc((offs)&0xFF, fp);
+						fputc(((offs)>>8)&0xFF, fp);
+						fputc(((offs)>>16)&0xFF, fp);
+						fputc(((offs)>>24)&0xFF, fp);
 #else
-						fputc((g->bx+g->by*VW)&0xFF, fp);
-						fputc((g->bx+g->by*VW)>>8, fp);
+						fputc((offs)&0xFF, fp);
+						fputc((offs)>>8, fp);
 #endif
 						fputc(g->pal & 0xFF, fp);
 						fputc(g->pal>>8, fp);

@@ -333,11 +333,12 @@ int main(int argc, char *argv[])
 		SDL_RenderCopy(renderer, texlist[curtex], NULL, NULL);
 #endif
 
+		int mocx = 0, mocy = 0;
 		if(fscls != 0x01)
 		{
 			// Get mocomp info
-			int mocx = (int)(int8_t)fgetc(fp);
-			int mocy = (int)(int8_t)fgetc(fp);
+			mocx = (int)(int8_t)fgetc(fp);
+			mocy = (int)(int8_t)fgetc(fp);
 			do_mocomp(mocx, mocy);
 		}
 
@@ -347,6 +348,7 @@ int main(int argc, char *argv[])
 #endif
 
 		// Draw rectangles
+		//fprintf(stderr, "begrect %i %i\n", mocx, mocy);
 		for(;;)
 		{
 			int offs, rw, rh, rx, ry;
@@ -434,6 +436,8 @@ int main(int argc, char *argv[])
 					rw = fgetc(fp);
 					assert(rw > 0);
 				}
+				assert(rw <= vidw);
+				assert(rh <= vidh);
 
 				// Get offs
 				offs = fgetc(fp);
@@ -516,13 +520,14 @@ int main(int argc, char *argv[])
 			{
 				int realablen = ablen;
 
-				if(aring_end + ablen >= AUDIO_RING_BUF)
+				if(ablen >= AUDIO_RING_BUF - aring_end)
 				{
 					// Read until buffer end
-					fread(aring_data + aring_end, AUDIO_RING_BUF - aring_end, 1, fp);
+					int bufdec = (AUDIO_RING_BUF - aring_end);
+					fread(aring_data + aring_end, bufdec, 1, fp);
 
 					// Wrap values
-					ablen -= (AUDIO_RING_BUF - aring_end);
+					ablen -= bufdec;
 					aring_end = 0;
 				}
 
@@ -538,7 +543,7 @@ int main(int argc, char *argv[])
 				assert(incr < AUDIO_RING_BUF);
 
 				// Align
-				if((ablen & 1) != 0)
+				if((realablen & 1) != 0)
 					fgetc(fp);
 			}
 		}

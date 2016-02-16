@@ -118,7 +118,7 @@ int main(int argc, char *argv[])
 
 		}
 
-		if(astream == NULL)
+		if(1 && astream == NULL)
 		{
 			astream = format_ctx->streams[i];
 
@@ -156,16 +156,19 @@ int main(int argc, char *argv[])
 	av_dict_set(&aopts, "refcounted_frames", "1", 0);
 
 	// open codec context
-	//AVCodecContext *vcodec_ctx = avcodec_alloc_context3(vcodec);
 	AVCodecContext *vcodec_ctx = vstream->codec;
 	assert(vcodec_ctx != NULL);
 	err = avcodec_open2(vcodec_ctx, vcodec, &vopts);
 	assert(err == 0);
 
-	AVCodecContext *acodec_ctx = astream->codec;
-	assert(acodec_ctx != NULL);
-	err = avcodec_open2(acodec_ctx, acodec, &aopts);
-	assert(err == 0);
+	AVCodecContext *acodec_ctx = NULL;
+	if(astream != NULL)
+	{
+		acodec_ctx = astream->codec;
+		assert(acodec_ctx != NULL);
+		err = avcodec_open2(acodec_ctx, acodec, &aopts);
+		assert(err == 0);
+	}
 
 	// allocate frame
 	AVFrame *frame = av_frame_alloc();
@@ -173,6 +176,8 @@ int main(int argc, char *argv[])
 	uint8_t *outdata[4] = {NULL, NULL, NULL, NULL};
 	int outstride[4] = {0, 0, 0, 0};
 	int outbufsz = 0;
+
+	int outfreq = 0;
 
 	// write header
 	if(fp != NULL)
@@ -201,11 +206,18 @@ int main(int argc, char *argv[])
 		int den = vstream->avg_frame_rate.den;
 		int fps = (num + (den>>1))/den;
 		fprintf(stderr, "FPS: %i (%i/%i)\n", fps, num, den);
+
 		int tnum = vstream->r_frame_rate.num;
 		int tden = vstream->r_frame_rate.den;
 		int tfps = (tnum + (tden>>1))/tden;
 		fprintf(stderr, "real FPS: %i (%i/%i)\n", tfps, tnum, tden);
-		if(fps >= 255) fps = tfps;
+		if(fps >= 255)
+		{
+			fps = tfps;
+			num = tnum;
+			den = tden;
+		}
+
 		assert(fps >= 1 && fps <= 255);
 		fputc(fps, fp);
 		// TODO: enforce 20fps for OC mode
@@ -218,7 +230,7 @@ int main(int argc, char *argv[])
 			// audio codec
 			// 0x00 = no audio (thus no audio packets)
 			// 0x01 = 8-bit unsigned PCM
-			// 0x02 = 16-bit signed PCM
+			// 0x02 = 16-bit signed PCM (TODO)
 			// 0x03 = XA-ADPCM knockoff (TODO)
 			fputc(0x01, fp);
 
@@ -229,12 +241,17 @@ int main(int argc, char *argv[])
 			// reserved
 			fputc(0, fp); fputc(0, fp);
 
+			// get corrected output frequency
+			// (we're freq-shifting rather than giving the proper FPS)
+			outfreq = (acodec_ctx->sample_rate*fps*den + num-1)/num;
+
 			// audio frequency
 			fprintf(stderr, "audio: %i, %i Hz\n", acodec_ctx->sample_fmt, acodec_ctx->sample_rate);
-			fputc((acodec_ctx->sample_rate>>0) & 0xFF, fp);
-			fputc((acodec_ctx->sample_rate>>8) & 0xFF, fp);
-			fputc((acodec_ctx->sample_rate>>16) & 0xFF, fp);
-			fputc((acodec_ctx->sample_rate>>24) & 0xFF, fp);
+			fprintf(stderr, "corrected: %i Hz\n", outfreq);
+			fputc((outfreq>>0) & 0xFF, fp);
+			fputc((outfreq>>8) & 0xFF, fp);
+			fputc((outfreq>>16) & 0xFF, fp);
+			fputc((outfreq>>24) & 0xFF, fp);
 
 			// reserved
 			fputc(0, fp); fputc(0, fp); fputc(0, fp); fputc(0, fp);
@@ -302,13 +319,17 @@ int main(int argc, char *argv[])
 	struct SwsContext *scaler_ctx = NULL;
 
 	// set up resampler
-	struct SwrContext *resamp_ctx = swr_alloc_set_opts(NULL,
-		AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_U8, acodec_ctx->sample_rate,
-		acodec_ctx->channel_layout, acodec_ctx->sample_fmt, acodec_ctx->sample_rate,
-		0, NULL);
-	assert(resamp_ctx != NULL);
-	err = swr_init(resamp_ctx);
-	assert(err == 0);
+	struct SwrContext *resamp_ctx = NULL;
+	if(astream != NULL)
+	{
+		resamp_ctx = swr_alloc_set_opts(NULL,
+			AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_U8, outfreq,
+			acodec_ctx->channel_layout, acodec_ctx->sample_fmt, acodec_ctx->sample_rate,
+			0, NULL);
+		assert(resamp_ctx != NULL);
+		err = swr_init(resamp_ctx);
+		assert(err == 0);
+	}
 
 	// set up audio buffers
 	uint8_t *aubuf = NULL;
@@ -317,6 +338,10 @@ int main(int argc, char *argv[])
 
 	for(;;)
 	{
+		// TODO: buffer frames for, say, MP4
+		// just so we don't end up with out-of-sync audio
+		// (it spams a few video frames, then spams a few audio frames)
+
 		// read frame
 		int got_pic = 0;
 		pkt.data = NULL;
@@ -367,11 +392,14 @@ int main(int argc, char *argv[])
 					// resample + copy
 					uint8_t *bmesh[4] = {(uint8_t *)(aubuf + aubuf_len - outsmps)};
 					int rserr = swr_convert(resamp_ctx
-						, bmesh, outsmps/(1*1)
-						, frame->data, frame->nb_samples
+						, bmesh, (outsmps)/(1*1)
+						, (const uint8_t **)frame->data, frame->nb_samples
 						);
+					//fprintf(stderr, "%i %i %i\n", rserr, outsmps, frame->nb_samples);
 					assert(rserr >= 0);
-					assert(rserr == outsmps);
+					//assert(rserr == outsmps);
+					aubuf_len -= outsmps;
+					aubuf_len += rserr;
 
 					// advance
 					brem -= xsize;
@@ -521,7 +549,9 @@ int main(int argc, char *argv[])
 
 					// pad to 16-bit
 					if((aubuf_len & 1) != 0)
+					{
 						fputc(0, fp);
+					}
 
 					// clear buffer
 					aubuf_len = 0;
