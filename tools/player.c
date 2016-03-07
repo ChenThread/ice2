@@ -1,5 +1,5 @@
 #define VIDSCALE 1
-#define VIDOUTSCALE 1
+#define VIDOUTSCALE 2
 
 #define AUDIO_RING_BUF (256*1024)
 
@@ -432,8 +432,8 @@ int main(int argc, char *argv[])
 					// 8-bit size mode
 					rh = fgetc(fp);
 					assert(rh > 0);
-					if(rh == 0xFF) break;
 					rw = fgetc(fp);
+					if(rh == 0xFF) break;
 					assert(rw > 0);
 				}
 				assert(rw <= vidw);
@@ -454,6 +454,7 @@ int main(int argc, char *argv[])
 				// Turn offs into coords
 				rx = offs%vidw;
 				ry = offs/vidw;
+				//fprintf(stderr, "%i %i %i %i %i\n", rx, ry, rw, rh, offs);
 				assert(rx+rw <= vidw);
 				assert(ry+rh <= vidh);
 

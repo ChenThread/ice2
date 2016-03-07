@@ -2,7 +2,7 @@
 
 SOSUFFIX=so
 
-CFLAGS = -g -O2 -flto -I. -std=gnu99 -Wall -Wextra -pthread -march=native -mtune=native
+CFLAGS = -g -O3 -flto -I. -std=gnu99 -Wall -Wextra -pthread -march=native -mtune=native
 LDFLAGS = -g -flto -pthread
 LIBS = -lavcodec -lavformat -lswscale -lavutil -lswresample
 BINNAME = ice2

@@ -41,6 +41,7 @@ int main(int argc, char *argv[])
 {
 	int x, y, i;
 	int err;
+	int no_audio = 0;
 
 	for(i = 1; i < argc; i++)
 	{
@@ -67,6 +68,9 @@ int main(int argc, char *argv[])
 
 			assert(fname_in == NULL);
 			fname_in = argv[i];
+
+		} else if(!strcmp("-an", argv[i])) {
+			i++; no_audio = 1;
 
 		} else {
 			fprintf(stderr, "error: unexpected argument '%s'\n", argv[i]);
@@ -118,7 +122,7 @@ int main(int argc, char *argv[])
 
 		}
 
-		if(1 && astream == NULL)
+		if((!no_audio) && astream == NULL)
 		{
 			astream = format_ctx->streams[i];
 
@@ -211,7 +215,8 @@ int main(int argc, char *argv[])
 		int tden = vstream->r_frame_rate.den;
 		int tfps = (tnum + (tden>>1))/tden;
 		fprintf(stderr, "real FPS: %i (%i/%i)\n", tfps, tnum, tden);
-		if(fps >= 255)
+		//if(fps >= 255)
+		if(tfps >= 4 && tfps < 255)
 		{
 			fps = tfps;
 			num = tnum;
@@ -333,8 +338,8 @@ int main(int argc, char *argv[])
 
 	// set up audio buffers
 	uint8_t *aubuf = NULL;
-	size_t aubuf_len = 0;
-	size_t aubuf_max = 0;
+	ssize_t aubuf_len = 0;
+	ssize_t aubuf_max = 0;
 
 	for(;;)
 	{
@@ -382,9 +387,9 @@ int main(int argc, char *argv[])
 					// add to buffer
 					int outsmps = swr_get_out_samples(resamp_ctx, frame->nb_samples);
 					aubuf_len += outsmps;
-					if(aubuf_len+128 > aubuf_max)
+					if(aubuf_len+128 > aubuf_max-64)
 					{
-						aubuf_max = aubuf_len + 256;
+						aubuf_max = aubuf_len + 256 + 64;
 						aubuf = realloc(aubuf, aubuf_max*1*1);
 						//fprintf(stderr, "out %i\n", (int)aubuf_max);
 					}
@@ -540,21 +545,38 @@ int main(int argc, char *argv[])
 				} else {
 
 					// pull packet
-					assert(aubuf_len >= 0 && aubuf_len < 65536);
-					fputc((int)(aubuf_len&0xFF), fp);
-					fputc((int)(aubuf_len>>8), fp);
-
-					// write
-					fwrite(aubuf, aubuf_len, 1, fp);
-
-					// pad to 16-bit
-					if((aubuf_len & 1) != 0)
+					//assert(aubuf_len >= 0 && aubuf_len < 65536);
+					assert(aubuf_len >= 0);
+					if(aubuf_len > 0xFFFE)
 					{
-						fputc(0, fp);
+						fputc((int)(0xFFFE&0xFF), fp);
+						fputc((int)(0xFFFE>>8), fp);
+
+						// write
+						fwrite(aubuf, 0xFFFE, 1, fp);
+
+					} else {
+						fputc((int)(aubuf_len&0xFF), fp);
+						fputc((int)(aubuf_len>>8), fp);
+
+						// write
+						fwrite(aubuf, aubuf_len, 1, fp);
+
+						// pad to 16-bit
+						if((aubuf_len & 1) != 0)
+						{
+							fputc(0, fp);
+						}
 					}
 
 					// clear buffer
-					aubuf_len = 0;
+					if(aubuf_len > 0xFFFE)
+					{
+						// TODO!
+						aubuf_len = 0;
+					} else {
+						aubuf_len = 0;
+					}
 				}
 			}
 		}
@@ -575,6 +597,49 @@ int main(int argc, char *argv[])
 		fired_algo_thread = 1;
 	}
 	
+	// finish algorithm
+	if(fired_algo_thread)
+	{
+		// get result
+		struct tdat_algo_1 *Ta;
+#ifdef NO_THREADS
+		Ta = algo_1(&TaS);
+#else
+		int e = pthread_join(algo_thread, (void *)&Ta);
+		assert(e == 0);
+#endif
+
+		// add sound packet
+		if(acodec_ctx != NULL)
+		{
+			if(aubuf_len == 0)
+			{
+				// no sound in this packet
+				fputc(0, fp);
+				fputc(0, fp);
+			} else {
+
+				// pull packet
+				if(aubuf_len > 0xFFFE) aubuf_len = 0xFFFE;
+				assert(aubuf_len >= 0 && aubuf_len < 65536);
+				fputc((int)(aubuf_len&0xFF), fp);
+				fputc((int)(aubuf_len>>8), fp);
+
+				// write
+				fwrite(aubuf, aubuf_len, 1, fp);
+
+				// pad to 16-bit
+				if((aubuf_len & 1) != 0)
+				{
+					fputc(0, fp);
+				}
+
+				// clear buffer
+				aubuf_len = 0;
+			}
+		}
+	}
+
 	fprintf(stderr, "***** DONE *****\n");
 
 	if(fp != NULL)
@@ -596,7 +661,8 @@ int main(int argc, char *argv[])
 	}
 
 	// clean up ffmpeg
-	avformat_close_input(&format_ctx);
+	// TODO!
+	//avformat_close_input(&format_ctx);
 
 	return 0;
 }

@@ -23,9 +23,9 @@
 //define I_AM_A_POLISH_WEEB
 //define NO_THREADS
 
-#if 1
+#if 0
 #define VW 640
-#define VH 448
+#define VH 360
 #define GPU_BUDGET_HARD_MAX (2000)
 #define GPU_BUDGET_MAX (2000-6)
 #define COST_COPY 0
@@ -67,6 +67,7 @@ typedef uint8_t pixeltyp;
 #define PAL_WTC_GREY 64
 #define PAL_WTC 1
 #define GREY_RAMP 64
+//define GREY_RAMP 18
 
 
 typedef enum gop_op
