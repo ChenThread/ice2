@@ -163,6 +163,7 @@ int rgb_to_pal_walk(int *r, int *g, int *b);
 #define rgb_to_pal rgb_to_pal_exact_refimp
 #else
 #define rgb_to_pal rgb_to_pal_exact
+//define rgb_to_pal rgb_to_pal_exact_wrgb
 #endif
 #define rgb_to_pal_pre rgb_to_pal
 #endif

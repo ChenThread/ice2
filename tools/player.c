@@ -2,6 +2,9 @@
 #define VIDOUTSCALE 2
 
 #define AUDIO_RING_BUF (256*1024)
+#define AUDIO_SKIP_UPPER (32*1024)
+#define AUDIO_SKIP_LOWER (28*1024)
+#define AUDIO_TARGET_LATENCY (8*1024)
 
 #define SOFTWARE_BLIT_MODE
 
@@ -46,10 +49,17 @@ int has_fired = 0;
 void authread(void *ud, Uint8 *stream, int len)
 {
 	// Clear buf
-	memset(stream, 0, len);
+	memset(stream, 128, len);
+	/*
+	stream[0] = 255;
+	stream[1] = 255;
+	stream[2] = 255;
+	stream[3] = 255;
+	*/
 
 	// Check how much of the buffer is available
 	int bufsz = SDL_AtomicGet(&aring_used);
+	//fprintf(stderr, "tick %d aring %d\n", len, aring_used);
 
 	// If we haven't fired, we need to wait for the buffer to fill)
 	if(!has_fired)
@@ -67,6 +77,7 @@ void authread(void *ud, Uint8 *stream, int len)
 	}
 
 	// Clamp to output buffer size
+	int prebufsz = bufsz;
 	if(bufsz > len)
 		bufsz = len;
 	int realbufsz = bufsz;
@@ -92,16 +103,28 @@ void authread(void *ud, Uint8 *stream, int len)
 	}
 
 	// advance + decrement used space
+	if(prebufsz >= AUDIO_SKIP_UPPER)
+	{
+		int skip_amt = prebufsz+AUDIO_SKIP_UPPER-AUDIO_SKIP_LOWER;
+		aring_beg = (aring_beg + skip_amt) % AUDIO_RING_BUF;
+		realbufsz += skip_amt;
+	}
+
 	realbufsz = SDL_AtomicAdd(&aring_used, -realbufsz);
+	//fprintf(stderr, "honk %d\n", realbufsz);
 
 	// ensure this is correct
 	assert(realbufsz >= 0);
 
-
-
+	/*
+	stream[0] = 255;
+	stream[1] = 255;
+	stream[2] = 255;
+	stream[3] = 255;
+	*/
 }
 
-void pal_to_rgb(int pal, int *restrict r, int *restrict g, int *restrict b)
+void pal_to_rgb(int pal, int *r, int *g, int *b)
 {
 	assert(pal >= 0 && pal <= 255);
 
@@ -187,6 +210,8 @@ int main(int argc, char *argv[])
 	// Open file
 	FILE *fp = fopen(argv[1], "rb");
 
+	fprintf(stderr, "File open %s %p\n", argv[1], fp);
+
 	// Read header
 	if(fgetc(fp) != 'I') abort_msg("not a valid ICE2 video");
 	if(fgetc(fp) != 'C') abort_msg("not a valid ICE2 video");
@@ -243,6 +268,8 @@ int main(int argc, char *argv[])
 	fgetc(fp); fgetc(fp); fgetc(fp); fgetc(fp);
 	fgetc(fp); fgetc(fp); fgetc(fp); fgetc(fp);
 
+	fprintf(stderr, "Header loaded, setting up SDL + audio\n");
+
 	// Init SDL
 	if(aufmt != 0)
 	{
@@ -259,12 +286,16 @@ int main(int argc, char *argv[])
 		auspec.samples = 2048;
 		auspec.callback = authread;
 		int err = SDL_OpenAudio(&auspec, NULL);
+		fprintf(stderr, "open audio err: %d\n", err);
 		assert(err >= 0);
 		SDL_PauseAudio(0);
 
 	} else {
+		fprintf(stderr, "No audio\n");
 		SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO);
 	}
+
+	fprintf(stderr, "Setting up palette\n");
 
 	// Set up OC palette if fmt subclass is 0x01
 	if(fscls == 0x01)

@@ -63,6 +63,9 @@ int main(int argc, char *argv[])
 				return 1;
 			}
 
+		} else if(!strcmp("-d", argv[i])) {
+			fp = stdout;
+
 		} else if(!strcmp("-i", argv[i])) {
 			i++; assert(i < argc);
 
@@ -70,7 +73,7 @@ int main(int argc, char *argv[])
 			fname_in = argv[i];
 
 		} else if(!strcmp("-an", argv[i])) {
-			i++; no_audio = 1;
+			no_audio = 1;
 
 		} else {
 			fprintf(stderr, "error: unexpected argument '%s'\n", argv[i]);
@@ -248,7 +251,9 @@ int main(int argc, char *argv[])
 
 			// get corrected output frequency
 			// (we're freq-shifting rather than giving the proper FPS)
-			outfreq = (acodec_ctx->sample_rate*fps*den + num-1)/num;
+			// the int64_t spam is because there are vids with REALLY weird FPS fractions
+			outfreq = ((int64_t)acodec_ctx->sample_rate*(int64_t)fps*(int64_t)den
+				+ (int64_t)num-1)/(int64_t)num;
 
 			// audio frequency
 			fprintf(stderr, "audio: %i, %i Hz\n", acodec_ctx->sample_fmt, acodec_ctx->sample_rate);

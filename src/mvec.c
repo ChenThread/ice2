@@ -120,7 +120,8 @@ void *calc_motion_comp(void *tdat)
 	//if(0) // supported, just damn slow (on the target platform that is)
 	if(1) // just make the damn thing trigger anyway
 #else
-	if(move_diff < 28*VW*VH)
+	if(1)
+	//if(move_diff < 28*VW*VH)
 	//if(move_diff < 40*VW*VH)
 #endif
 	{

@@ -9,10 +9,10 @@ export SIZE=640x480
 #export FPS=30
 export FPS=60
 
-cc -O -o player tools/player.c `sdl2-config --cflags --libs` && \
+cc -O3 -o player tools/player.c `sdl2-config --cflags --libs` && \
 make -j8 && \
 echo OK && \
-./ice2 -o /dev/stdout -i "$1" | \
+./ice2 -d -i "$1" | \
 ./player /dev/stdin
 
 #ffmpeg -v 0 -f rawvideo -pix_fmt rgb24 -s $SIZE -r $FPS -i - $5 $6 -vn -i "$1" -map 0:0 -map "1$2" $4 -f avi -acodec mp3 -vcodec rawvideo -r $FPS -s $SIZE -pix_fmt bgr24 - 2>/dev/null | \

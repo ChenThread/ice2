@@ -218,6 +218,47 @@ int rgb_to_pal_exact(int *r, int *g, int *b)
 	return ibest;
 
 }
+
+int rgb_to_pal_exact_wrgb(int *r, int *g, int *b)
+{
+	int i;
+
+	// check if r,g,b within bounds
+	assert(*r >= 0x00); assert(*r <= 0xFF);
+	assert(*g >= 0x00); assert(*g <= 0xFF);
+	assert(*b >= 0x00); assert(*b <= 0xFF);
+
+	// compare each
+	int bdiff = -1;
+	int bbest = 0;
+	for(i = 0; i < 256; i++)
+	{
+		// pick appropriate r,g,b
+		int xr, xg, xb, sr;
+		pal_to_rgb(i, &xr, &xg, &xb);
+		sr = (xr + *r) >> 1;
+
+		assert(xr <= 255);
+		assert(xg <= 255);
+		assert(xb <= 255);
+
+		// convert
+		xr -= *r;
+		xg -= *g;
+		xb -= *b;
+		int xdiff = (((512 + sr) * xr * xr)) + 1024*xg*xg + (((767 - sr) * xb * xb));
+
+		// check if nearest is best
+		if(bdiff == -1 || xdiff < bdiff)
+		{
+			bbest = i;
+			bdiff = xdiff;
+		}
+	}
+
+	pal_to_rgb(bbest, r, g, b);
+	return bbest;
+}
 #endif
 
 int rgb_to_pal_approx(int *r, int *g, int *b)
