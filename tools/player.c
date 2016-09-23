@@ -8,6 +8,13 @@
 
 #define SOFTWARE_BLIT_MODE
 
+#ifndef CONST_PREC
+#define CONST_PREC 10
+#endif
+#ifndef CONST_POSTFILT
+#define CONST_POSTFILT 140
+#endif
+
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
@@ -37,12 +44,68 @@ uint16_t ocpal[256];
 int vidw, vidh;
 uint16_t *scrbuf;
 
+uint8_t input_audio[0x10000];
+uint8_t dfpwm_tmp_buffer[0x10000];
+
 __attribute__((noreturn))
 void abort_msg(const char *msg)
 {
 	fprintf(stderr, "ERROR: %s\n", msg);
 	fflush(stderr);
 	abort();
+}
+
+int audecmp_fq = 0;
+int audecmp_q = 0;
+int audecmp_s = 0;
+int audecmp_lt = -128;
+void au_decompress(int *fq, int *q, int *s, int *lt, int fs, int len, uint8_t *outbuf, uint8_t *inbuf)
+{
+	int i,j;
+	uint8_t d;
+	for(i = 0; i < len; i++)
+	{
+		// get bits
+		d = *(inbuf++);
+
+		for(j = 0; j < 8; j++)
+		{
+			// set target
+			int t = ((d&1) ? 127 : -128);
+			d >>= 1;
+
+			// adjust charge
+			int nq = *q + ((*s * (t-*q) + (1<<(CONST_PREC-1)))>>CONST_PREC);
+			if(nq == *q && nq != t)
+				*q += (t == 127 ? 1 : -1);
+			int lq = *q;
+			*q = nq;
+
+			// adjust strength
+			int st = (t != *lt ? 0 : (1<<CONST_PREC)-1);
+			int ns = *s;
+			if(ns != st)
+				ns += (st != 0 ? 1 : -1);
+#if CONST_PREC > 8
+			if(ns < 1+(1<<(CONST_PREC-8))) ns = 1+(1<<(CONST_PREC-8));
+#endif
+			*s = ns;
+
+			// FILTER: perform antijerk
+			int ov = (t != *lt ? (nq+lq)>>1 : nq);
+
+			// FILTER: perform LPF
+			*fq += ((fs*(ov-*fq) + 0x80)>>8);
+			ov = *fq;
+
+			// output sample
+			ov += 128;
+			ov &= 0xFF;
+			*(outbuf++) = ov;
+
+			*lt = t;
+		}
+	}
 }
 
 int has_fired = 0;
@@ -256,6 +319,8 @@ int main(int argc, char *argv[])
 	// Read audio data
 	int aufmt = fgetc(fp);
 	int auchns = fgetc(fp);
+	if(aufmt != 0x00 && aufmt != 0x01 && aufmt != 0x0A)
+		abort_msg("ERROR: only U8 or DFPWM1a supported");
 	if(auchns != (aufmt == 0 ? 0 : 1)) abort_msg("ERROR: only mono audio supported");
 	fgetc(fp); fgetc(fp);
 
@@ -550,13 +615,28 @@ int main(int argc, char *argv[])
 
 			if(ablen != 0)
 			{
+				fread(input_audio, ablen, 1, fp);
+				uint8_t *insrc = input_audio;
+
+				if(aufmt == 0x0A)
+				{
+					// Decompress DFPWM1a
+					memcpy(dfpwm_tmp_buffer, input_audio, ablen);
+					assert(ablen <= 0x2000);
+					au_decompress(&audecmp_fq, &audecmp_q, &audecmp_s,
+						&audecmp_lt, CONST_POSTFILT,
+						ablen, input_audio, dfpwm_tmp_buffer);
+					ablen <<= 3;
+				}
+
 				int realablen = ablen;
 
 				if(ablen >= AUDIO_RING_BUF - aring_end)
 				{
 					// Read until buffer end
 					int bufdec = (AUDIO_RING_BUF - aring_end);
-					fread(aring_data + aring_end, bufdec, 1, fp);
+					memcpy(aring_data + aring_end, insrc, bufdec);
+					insrc += bufdec;
 
 					// Wrap values
 					ablen -= bufdec;
@@ -566,7 +646,7 @@ int main(int argc, char *argv[])
 				// Read remaining data
 				if(ablen > 0)
 				{
-					fread(aring_data + aring_end, ablen, 1, fp);
+					memcpy(aring_data + aring_end, insrc, ablen);
 					aring_end += ablen;
 				}
 
@@ -608,6 +688,7 @@ int main(int argc, char *argv[])
 		ticks_now = SDL_GetTicks();
 		if((int32_t)(ticks_later - ticks_now) >= 10)
 			SDL_Delay(ticks_later - ticks_now);
+		//fprintf(stderr, "%.3f\n", ticks_now/1000.0);
 
 		// Poll
 		int doret = 0;

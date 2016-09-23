@@ -37,9 +37,149 @@ int gop_bloat_cost = 0;
 const char *fname_in = NULL;
 const char *fname_out = NULL;
 
+uint8_t *outdata[4] = {NULL, NULL, NULL, NULL};
+int outstride[4] = {0, 0, 0, 0};
+int outbufsz = 0;
+int outfreq = 0;
+
+pthread_t algo_thread;
+int fired_algo_thread = 0;
+struct tdat_algo_1 TaS;
+AVCodecContext *acodec_ctx = NULL;
+
+uint8_t *aubuf = NULL;
+ssize_t aubuf_len = 0;
+ssize_t aubuf_max = 0;
+
+int aucmp_q = 0;
+int aucmp_s = 0;
+int aucmp_lt = -128;
+
+void make_output_frame(void)
+{
+	int x, y;
+
+	// fetch 
+	/*
+	if(fread(realrawinbuf, VW*VH*3, 1, stdin) <= 0)
+	{
+		//for(;;) fputc(rand()>>16, stdout);
+		break;
+	}
+	*/
+
+	// convert to YUV
+	for(y = 0; y < VH; y++)
+	for(x = 0; x < VW; x++)
+	{
+		//int r = realrawinbuf[y][x][0];
+		//int g = realrawinbuf[y][x][1];
+		//int b = realrawinbuf[y][x][2];
+		int r = outdata[0][y*VW*3+3*x];
+		int g = outdata[1][y*VW*3+3*x];
+		int b = outdata[2][y*VW*3+3*x];
+
+		rawinbuf_new_pal[y][x] = rgb_to_pal_pre(&r, &g, &b);
+#ifdef NOYUV
+		rawinbuf_mvec[0][y][x] = g-4;
+		rawinbuf_mvec[1][y][x] = b-4;
+		rawinbuf_mvec[2][y][x] = r-4;
+#else
+		int l, cb, cr;
+		to_ycbcr(r, g, b, &l, &cb, &cr);
+		rawinbuf_mvec[0][y][x] = l;
+		rawinbuf_mvec[1][y][x] = cb;
+		rawinbuf_mvec[2][y][x] = cr;
+#endif
+	}
+
+	// run motion compensation
+	struct tdat_calc_motion_comp TmS;
+	struct tdat_calc_motion_comp *Tm = calc_motion_comp(&TmS);
+
+	// run algorithm
+	if(fired_algo_thread)
+	{
+		// get result
+		struct tdat_algo_1 *Ta;
+#ifdef NO_THREADS
+		Ta = algo_1(&TaS);
+#else
+		int e = pthread_join(algo_thread, (void *)&Ta);
+		assert(e == 0);
+#endif
+
+		// add sound packet
+		if(acodec_ctx != NULL)
+		{
+			if(aubuf_len == 0)
+			{
+				// no sound in this packet
+				fputc(0, fp);
+				fputc(0, fp);
+			} else {
+
+				// pull packet
+				//assert(aubuf_len >= 0 && aubuf_len < 65536);
+				//fprintf(stderr, "aubuf len %08X\n", aubuf_len);
+				assert(aubuf_len >= 0);
+				ssize_t aubuf_len_cmp = (aubuf_len>>3);
+				if(aubuf_len > 0xFFFE)
+				{
+					fputc((int)(0xFFFE&0xFF), fp);
+					fputc((int)(0xFFFE>>8), fp);
+
+					// write
+					fwrite(aubuf, 0xFFFE, 1, fp);
+
+				} else {
+					au_compress(&aucmp_q, &aucmp_s, &aucmp_lt,
+						(int)aubuf_len_cmp, (uint8_t *)aubuf, (uint8_t *)aubuf);
+					fputc((int)(aubuf_len_cmp&0xFF), fp);
+					fputc((int)(aubuf_len_cmp>>8), fp);
+
+					// write
+					fwrite(aubuf, aubuf_len_cmp, 1, fp);
+
+					// pad to 16-bit
+					if((aubuf_len_cmp & 1) != 0)
+					{
+						fputc(0, fp);
+					}
+				}
+
+				// clear buffer
+				if(aubuf_len > 0xFFFE)
+				{
+					// TODO!
+					aubuf_len = 0;
+				} else {
+					aubuf_len = 0;
+				}
+			}
+		}
+	}
+
+	// back up intended buffer for frame compare
+	memcpy(rawlastbuf_mvec, rawinbuf_mvec, VW*VH*3);
+
+	// copy new buffers
+	memcpy(rawinbuf, rawinbuf_mvec, VW*VH*3);
+	memcpy(rawinbuf_pal, rawinbuf_new_pal, VW*VH*sizeof(pixeltyp));
+
+	// fire next run
+	memcpy(&TaS.Tm, Tm, sizeof(struct tdat_calc_motion_comp));
+#ifndef NO_THREADS
+	int e = pthread_create(&algo_thread, NULL, algo_1, &TaS);
+	assert(e == 0);
+#endif
+	fired_algo_thread = 1;
+
+}
+
 int main(int argc, char *argv[])
 {
-	int x, y, i;
+	int i;
 	int err;
 	int no_audio = 0;
 
@@ -146,6 +286,10 @@ int main(int argc, char *argv[])
 	vcodec = avcodec_find_decoder(vstream->codec->codec_id);
 	assert(vcodec != NULL);
 	fprintf(stderr, "video codec: %s\n", vcodec->name);
+	fprintf(stderr, "video time base: %d/%d\n"
+		, (int32_t)vstream->time_base.num
+		, (int32_t)vstream->time_base.den
+		);
 
 	if(astream != NULL)
 	{
@@ -168,7 +312,6 @@ int main(int argc, char *argv[])
 	err = avcodec_open2(vcodec_ctx, vcodec, &vopts);
 	assert(err == 0);
 
-	AVCodecContext *acodec_ctx = NULL;
 	if(astream != NULL)
 	{
 		acodec_ctx = astream->codec;
@@ -180,13 +323,9 @@ int main(int argc, char *argv[])
 	// allocate frame
 	AVFrame *frame = av_frame_alloc();
 	assert(frame != NULL);
-	uint8_t *outdata[4] = {NULL, NULL, NULL, NULL};
-	int outstride[4] = {0, 0, 0, 0};
-	int outbufsz = 0;
-
-	int outfreq = 0;
 
 	// write header
+	double ifps = 0.5;
 	if(fp != NULL)
 	{
 		fprintf(fp, "ICE2");
@@ -229,6 +368,7 @@ int main(int argc, char *argv[])
 		assert(fps >= 1 && fps <= 255);
 		fputc(fps, fp);
 		// TODO: enforce 20fps for OC mode
+		ifps = 1.0/(double)fps;
 
 		// reserved
 		fputc(0, fp); fputc(0, fp); fputc(0, fp);
@@ -240,7 +380,8 @@ int main(int argc, char *argv[])
 			// 0x01 = 8-bit unsigned PCM
 			// 0x02 = 16-bit signed PCM (TODO)
 			// 0x03 = XA-ADPCM knockoff (TODO)
-			fputc(0x01, fp);
+			// 0x0A = DFPWM1a
+			fputc(0x0A, fp);
 
 			// channels
 			// TODO: handle more than one channel
@@ -314,10 +455,6 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	pthread_t algo_thread;
-	int fired_algo_thread = 0;
-	static struct tdat_algo_1 TaS;
-
 	// set up packet
 	AVPacket pkt;
 	av_init_packet(&pkt);
@@ -341,10 +478,9 @@ int main(int argc, char *argv[])
 		assert(err == 0);
 	}
 
-	// set up audio buffers
-	uint8_t *aubuf = NULL;
-	ssize_t aubuf_len = 0;
-	ssize_t aubuf_max = 0;
+	// get base time
+	double base_ts = 0.0;
+	int has_base_ts = 0;
 
 	for(;;)
 	{
@@ -442,9 +578,17 @@ int main(int argc, char *argv[])
 			//abort();
 		}
 
+		// get timestamp
+		double frame_ts = ((pkt.pts)*((double)(vstream->time_base.num)))
+			/ (double)(vstream->time_base.den);
+		if(!has_base_ts)
+		{
+			base_ts = frame_ts;
+			has_base_ts = 1;
+		}
+
 		if(got_pic)
 		{
-
 			// prep scaler
 			if(scaler_ctx == NULL)
 			{
@@ -475,12 +619,12 @@ int main(int argc, char *argv[])
 			assert(err >= 0);
 		}
 
+		if(!got_pic)
+			continue;
+
 		// nuke packet
 		av_packet_unref(&pkt);
 		//if(pkt.data != NULL) free(pkt.data);
-
-		if(!got_pic)
-			continue;
 
 		// nuke frame
 		av_frame_unref(frame);
@@ -489,117 +633,12 @@ int main(int argc, char *argv[])
 		if(scaler_ctx == NULL)
 			continue;
 
-		// fetch 
-		/*
-		if(fread(realrawinbuf, VW*VH*3, 1, stdin) <= 0)
+		// do us a few frames
+		while(frame_ts >= base_ts)
 		{
-			//for(;;) fputc(rand()>>16, stdout);
-			break;
+			make_output_frame();
+			base_ts += ifps;
 		}
-		*/
-
-		// convert to YUV
-		for(y = 0; y < VH; y++)
-		for(x = 0; x < VW; x++)
-		{
-			//int r = realrawinbuf[y][x][0];
-			//int g = realrawinbuf[y][x][1];
-			//int b = realrawinbuf[y][x][2];
-			int r = outdata[0][y*VW*3+3*x];
-			int g = outdata[1][y*VW*3+3*x];
-			int b = outdata[2][y*VW*3+3*x];
-
-			rawinbuf_new_pal[y][x] = rgb_to_pal_pre(&r, &g, &b);
-#ifdef NOYUV
-			rawinbuf_mvec[0][y][x] = g-4;
-			rawinbuf_mvec[1][y][x] = b-4;
-			rawinbuf_mvec[2][y][x] = r-4;
-#else
-			int l, cb, cr;
-			to_ycbcr(r, g, b, &l, &cb, &cr);
-			rawinbuf_mvec[0][y][x] = l;
-			rawinbuf_mvec[1][y][x] = cb;
-			rawinbuf_mvec[2][y][x] = cr;
-#endif
-		}
-
-		// run motion compensation
-		struct tdat_calc_motion_comp TmS;
-		struct tdat_calc_motion_comp *Tm = calc_motion_comp(&TmS);
-
-		// run algorithm
-		if(fired_algo_thread)
-		{
-			// get result
-			struct tdat_algo_1 *Ta;
-#ifdef NO_THREADS
-			Ta = algo_1(&TaS);
-#else
-			int e = pthread_join(algo_thread, (void *)&Ta);
-			assert(e == 0);
-#endif
-
-			// add sound packet
-			if(acodec_ctx != NULL)
-			{
-				if(aubuf_len == 0)
-				{
-					// no sound in this packet
-					fputc(0, fp);
-					fputc(0, fp);
-				} else {
-
-					// pull packet
-					//assert(aubuf_len >= 0 && aubuf_len < 65536);
-					assert(aubuf_len >= 0);
-					if(aubuf_len > 0xFFFE)
-					{
-						fputc((int)(0xFFFE&0xFF), fp);
-						fputc((int)(0xFFFE>>8), fp);
-
-						// write
-						fwrite(aubuf, 0xFFFE, 1, fp);
-
-					} else {
-						fputc((int)(aubuf_len&0xFF), fp);
-						fputc((int)(aubuf_len>>8), fp);
-
-						// write
-						fwrite(aubuf, aubuf_len, 1, fp);
-
-						// pad to 16-bit
-						if((aubuf_len & 1) != 0)
-						{
-							fputc(0, fp);
-						}
-					}
-
-					// clear buffer
-					if(aubuf_len > 0xFFFE)
-					{
-						// TODO!
-						aubuf_len = 0;
-					} else {
-						aubuf_len = 0;
-					}
-				}
-			}
-		}
-
-		// back up intended buffer for frame compare
-		memcpy(rawlastbuf_mvec, rawinbuf_mvec, VW*VH*3);
-
-		// copy new buffers
-		memcpy(rawinbuf, rawinbuf_mvec, VW*VH*3);
-		memcpy(rawinbuf_pal, rawinbuf_new_pal, VW*VH*sizeof(pixeltyp));
-
-		// fire next run
-		memcpy(&TaS.Tm, Tm, sizeof(struct tdat_calc_motion_comp));
-#ifndef NO_THREADS
-		int e = pthread_create(&algo_thread, NULL, algo_1, &TaS);
-		assert(e == 0);
-#endif
-		fired_algo_thread = 1;
 	}
 	
 	// finish algorithm
@@ -617,7 +656,8 @@ int main(int argc, char *argv[])
 		// add sound packet
 		if(acodec_ctx != NULL)
 		{
-			if(aubuf_len == 0)
+			ssize_t aubuf_len_cmp = (aubuf_len>>3);
+			if(aubuf_len_cmp == 0)
 			{
 				// no sound in this packet
 				fputc(0, fp);
@@ -627,14 +667,16 @@ int main(int argc, char *argv[])
 				// pull packet
 				if(aubuf_len > 0xFFFE) aubuf_len = 0xFFFE;
 				assert(aubuf_len >= 0 && aubuf_len < 65536);
-				fputc((int)(aubuf_len&0xFF), fp);
-				fputc((int)(aubuf_len>>8), fp);
+				au_compress(&aucmp_q, &aucmp_s, &aucmp_lt,
+					(int)aubuf_len_cmp, (uint8_t *)aubuf, (uint8_t *)aubuf);
+				fputc((int)(aubuf_len_cmp&0xFF), fp);
+				fputc((int)(aubuf_len_cmp>>8), fp);
 
 				// write
-				fwrite(aubuf, aubuf_len, 1, fp);
+				fwrite(aubuf, aubuf_len_cmp, 1, fp);
 
 				// pad to 16-bit
-				if((aubuf_len & 1) != 0)
+				if((aubuf_len_cmp & 1) != 0)
 				{
 					fputc(0, fp);
 				}

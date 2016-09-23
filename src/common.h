@@ -27,7 +27,7 @@
 #define VW 640
 #define VH 360
 #define GPU_BUDGET_HARD_MAX (2000)
-#define GPU_BUDGET_MAX (2000-6)
+#define GPU_BUDGET_MAX ((GPU_BUDGET_HARD_MAX)-6)
 #define COST_COPY 0
 #define COST_FG 0
 #define COST_BG 0
@@ -49,8 +49,10 @@ typedef uint16_t pixeltyp;
 #define VW 160
 #define VH 50
 // the compactor accidentally bloats things sometimes
-#define GPU_BUDGET_HARD_MAX (255)
-#define GPU_BUDGET_MAX (255-4)
+//define GPU_BUDGET_HARD_MAX (255)
+//define GPU_BUDGET_MAX (255-4)
+#define GPU_BUDGET_HARD_MAX (240)
+#define GPU_BUDGET_MAX (240-4)
 #define COST_FILL 2
 #define COST_COPY 4
 #define COST_SET 1
@@ -131,6 +133,9 @@ extern pixeltyp rawcurbuf_pal[VH][VW];
 
 // algo.c
 void *algo_1(void *tdat);
+
+// aucmp.c
+void au_compress(int *q, int *s, int *lt, int len, uint8_t *outbuf, uint8_t *inbuf);
 
 // compact.c
 void gpu_compact(void);
