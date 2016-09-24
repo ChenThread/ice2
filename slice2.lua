@@ -44,6 +44,7 @@ if tape then
 end
 
 local addr, port = ...
+port = tonumber(port)
 local fp = internet.connect(addr, port)
 
 local IBUF_LEN = 8192
