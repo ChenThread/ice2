@@ -18,9 +18,12 @@ export FPS=20
 
 cc -O3 -o player tools/player.c `sdl2-config --cflags --libs` && \
 make -j8 >/dev/null && \
-ffmpeg -v 0 $5 -i "$1" -itsoffset 5.0 -i "$1" -map 1:v -map 0:a $3 -r $FPS -f matroska -acodec aac -strict -2 -ar 48000 -vcodec rawvideo -pix_fmt bgr24 - 2>/dev/null | \
+ffmpeg -v 0 $5 -i "$1" $3 -r $FPS -f matroska -acodec aac -strict -2 -ar 48000 -vcodec rawvideo -pix_fmt bgr24 - 2>/dev/null | \
 ./ice2 -d -i /dev/stdin | \
+python lagit.py |
 cat -
+
+#ffmpeg -v 0 $5 -i "$1" -itsoffset 5.0 -i "$1" -map 1:v -map 0:a $3 -r $FPS -f matroska -acodec aac -strict -2 -ar 48000 -vcodec rawvideo -pix_fmt bgr24 - 2>/dev/null | \
 
 #cat - > $2
 
