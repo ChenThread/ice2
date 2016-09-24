@@ -44,8 +44,8 @@ uint16_t ocpal[256];
 int vidw, vidh;
 uint16_t *scrbuf;
 
-uint8_t input_audio[0x10000];
-uint8_t dfpwm_tmp_buffer[0x10000];
+uint8_t input_audio[0x10000*8];
+uint8_t dfpwm_tmp_buffer[0x10000*8];
 
 __attribute__((noreturn))
 void abort_msg(const char *msg)
@@ -621,12 +621,14 @@ int main(int argc, char *argv[])
 				if(aufmt == 0x0A)
 				{
 					// Decompress DFPWM1a
-					memcpy(dfpwm_tmp_buffer, input_audio, ablen);
-					assert(ablen <= 0x2000);
-					au_decompress(&audecmp_fq, &audecmp_q, &audecmp_s,
-						&audecmp_lt, CONST_POSTFILT,
-						ablen, input_audio, dfpwm_tmp_buffer);
-					ablen <<= 3;
+					if(ablen > 0) {
+						memcpy(dfpwm_tmp_buffer, input_audio, ablen);
+						//assert(ablen <= 0x8000);
+						au_decompress(&audecmp_fq, &audecmp_q, &audecmp_s,
+							&audecmp_lt, CONST_POSTFILT,
+							ablen, input_audio, dfpwm_tmp_buffer);
+						ablen <<= 3;
+					}
 				}
 
 				int realablen = ablen;

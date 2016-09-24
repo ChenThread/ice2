@@ -12,7 +12,7 @@ export SIZE=160x50
 #export FPS=18
 export FPS=20
 #export FPS=30
-$export FPS=60
+#export FPS=60
 
 cc -O3 -o player tools/player.c `sdl2-config --cflags --libs` && \
 make -j8 && \
